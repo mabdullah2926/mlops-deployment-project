@@ -2,40 +2,54 @@ import os
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
-from sklearn.datasets import load_breast_cancer
+from sklearn.datasets import load_breast_cancer, fetch_california_housing
+from sklearn.metrics import accuracy_score, r2_score
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 
-mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db"))
+TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+mlflow.set_tracking_uri(TRACKING_URI)
 mlflow.set_experiment("MLOps_PreProd_Pipeline")
-client = MlflowClient()
+client = MlflowClient(tracking_uri=TRACKING_URI)
 
-MODEL_NAME = "Disease_RF_Model"
+X_clf, y_clf = load_breast_cancer(return_X_y=True)
+_, X_clf_test, _, y_clf_test = train_test_split(X_clf, y_clf, test_size=0.2, random_state=42)
 
-# 1. Load model with 'Challenger' alias
-model_uri = f"models:/{MODEL_NAME}@Challenger"
-loaded_model = mlflow.sklearn.load_model(model_uri)
+X_reg, y_reg = fetch_california_housing(return_X_y=True)
+_, X_reg_test, _, y_reg_test = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
 
-# 2. Log and register model - assign alias 'Challenger-pre-test'
-with mlflow.start_run(run_name="pre_prod_validation"):
-    model_info = mlflow.sklearn.log_model(
-        loaded_model,
-        name="pre_prod_model",
-        registered_model_name=MODEL_NAME,
-        skops_trusted_types=["sklearn.tree._tree.Tree"],
-    )
-    new_ver = model_info.registered_model_version
-    client.set_registered_model_alias(MODEL_NAME, "Challenger-pre-test", new_ver)
-    print(f"Registered {MODEL_NAME} v{new_ver} with alias 'Challenger-pre-test'")
+models_cfg = [
+    ("Disease_RF_Model", "clf", 0.85),
+    ("Disease_LR_Model", "clf", 0.85),
+    ("Boston_RF_Model", "reg", 0.50),
+]
 
-    # 3. Model Test on holdout/test split
-    X_dis, y_dis = load_breast_cancer(return_X_y=True)
-    _, X_test, _, y_test = train_test_split(X_dis, y_dis, test_size=0.2, random_state=42)
-    test_acc = accuracy_score(y_test, loaded_model.predict(X_test))
-    mlflow.log_metric("pre_prod_accuracy", test_acc)
+for model_name, task_type, threshold in models_cfg:
+    model_uri = f"models:/{model_name}@Challenger"
+    loaded_model = mlflow.sklearn.load_model(model_uri)
 
-    if test_acc >= 0.85:
-        client.set_registered_model_alias(MODEL_NAME, "Challenger-post-test", new_ver)
-        print(f"SUCCESS: Model test passed (acc={test_acc:.4f}). Updated alias to 'Challenger-post-test' on v{new_ver}")
-    else:
-        print(f"FAILED: Model test failed (acc={test_acc:.4f}). Notify through Email.")
+    with mlflow.start_run(run_name=f"pre_prod_{model_name}"):
+        model_info = mlflow.sklearn.log_model(
+            sk_model=loaded_model,
+            name="model",
+            registered_model_name=model_name,
+        )
+        new_ver = model_info.registered_model_version
+        client.set_registered_model_alias(model_name, "Challenger-pre-test", new_ver)
+        print(f"Registered {model_name} v{new_ver} with alias 'Challenger-pre-test'")
+
+        if task_type == "clf":
+            preds = loaded_model.predict(X_clf_test)
+            score = accuracy_score(y_clf_test, preds)
+            mlflow.log_metric("pre_prod_accuracy", score)
+        else:
+            preds = loaded_model.predict(X_reg_test)
+            score = r2_score(y_reg_test, preds)
+            mlflow.log_metric("pre_prod_r2", score)
+
+        passed = score >= threshold
+        mlflow.log_param("test_passed", passed)
+        if not passed:
+            raise RuntimeError(f"Pre-prod test failed for {model_name} (score={score:.4f} < {threshold}). Notify through Email.")
+
+        client.set_registered_model_alias(model_name, "Challenger-post-test", new_ver)
+        print(f"SUCCESS: {model_name} v{new_ver} passed test (score={score:.4f}) -> alias 'Challenger-post-test'")

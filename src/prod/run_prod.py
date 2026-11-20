@@ -2,34 +2,44 @@ import os
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
-from sklearn.datasets import load_breast_cancer
-from sklearn.metrics import accuracy_score
+from sklearn.datasets import load_breast_cancer, fetch_california_housing
+from sklearn.metrics import accuracy_score, r2_score
 
-mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db"))
+TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+mlflow.set_tracking_uri(TRACKING_URI)
 mlflow.set_experiment("MLOps_Prod_Pipeline")
-client = MlflowClient()
+client = MlflowClient(tracking_uri=TRACKING_URI)
 
-MODEL_NAME = "Disease_RF_Model"
+X_clf, y_clf = load_breast_cancer(return_X_y=True)
+X_reg, y_reg = fetch_california_housing(return_X_y=True)
 
-# 1. Load model with 'Challenger-post-test' alias
-model_uri = f"models:/{MODEL_NAME}@Challenger-post-test"
-prod_model = mlflow.sklearn.load_model(model_uri)
+models_cfg = [
+    ("Disease_RF_Model", "clf", X_clf, y_clf),
+    ("Disease_LR_Model", "clf", X_clf, y_clf),
+    ("Boston_RF_Model", "reg", X_reg, y_reg),
+]
 
-# 2. Log and register model - assign alias 'Champion'
-with mlflow.start_run(run_name="prod_deployment"):
-    model_info = mlflow.sklearn.log_model(
-        prod_model,
-        name="prod_model",
-        registered_model_name=MODEL_NAME,
-        skops_trusted_types=["sklearn.tree._tree.Tree"],
-    )
-    prod_ver = model_info.registered_model_version
-    client.set_registered_model_alias(MODEL_NAME, "Champion", prod_ver)
-    print(f"Registered {MODEL_NAME} v{prod_ver} with alias 'Champion'")
+for model_name, task_type, X_data, y_data in models_cfg:
+    model_uri = f"models:/{model_name}@Challenger-post-test"
+    prod_model = mlflow.sklearn.load_model(model_uri)
 
-    # 3. Model Deploy / Production smoke check
-    X_dis, y_dis = load_breast_cancer(return_X_y=True)
-    preds = prod_model.predict(X_dis[:10])
-    full_acc = accuracy_score(y_dis, prod_model.predict(X_dis))
-    mlflow.log_metric("prod_full_accuracy", full_acc)
-    print(f"DEPLOYED: Champion v{prod_ver} ready for inference (sample preds={preds.tolist()}, full_acc={full_acc:.4f})")
+    with mlflow.start_run(run_name=f"prod_deploy_{model_name}"):
+        model_info = mlflow.sklearn.log_model(
+            sk_model=prod_model,
+            name="model",
+            registered_model_name=model_name,
+        )
+        prod_ver = model_info.registered_model_version
+        client.set_registered_model_alias(model_name, "Champion", prod_ver)
+        print(f"Registered {model_name} v{prod_ver} with alias 'Champion'")
+
+        preds = prod_model.predict(X_data[:5])
+        all_preds = prod_model.predict(X_data)
+        if task_type == "clf":
+            metric_val = accuracy_score(y_data, all_preds)
+            mlflow.log_metric("prod_full_accuracy", metric_val)
+        else:
+            metric_val = r2_score(y_data, all_preds)
+            mlflow.log_metric("prod_full_r2", metric_val)
+
+        print(f"DEPLOYED: {model_name} Champion v{prod_ver} (sample={preds.tolist()}, score={metric_val:.4f})")

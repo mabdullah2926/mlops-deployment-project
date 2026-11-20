@@ -56,3 +56,27 @@ with mlflow.start_run(run_name="rf_housing_dev"):
     mlflow.log_metric("r2_score", r2)
     mlflow.sklearn.log_model(rf_reg, name="housing_model", skops_trusted_types=["sklearn.tree._tree.Tree"])
     print(f"Logged Housing R2={r2:.4f}")
+
+
+# Ensure all required models (Disease RF, Disease LR, Boston RF) are registered with 'Challenger' alias
+try:
+    client = MlflowClient()
+    _exp = mlflow.get_experiment_by_name("MLOps_Dev_Pipeline")
+    if _exp:
+        _runs = mlflow.search_runs(experiment_ids=[_exp.experiment_id], order_by=["start_time DESC"], max_results=10)
+        _targets = {
+            "rf_disease_dev": "Disease_RF_Model",
+            "logreg_disease_dev": "Disease_LR_Model",
+            "rf_housing_dev": "Boston_RF_Model",
+        }
+        for _rname, _mname in _targets.items():
+            _sub = _runs[_runs["tags.mlflow.runName"] == _rname]
+            if not _sub.empty:
+                _rid = _sub.iloc[0]["run_id"]
+                _art = "housing_model" if _mname == "Boston_RF_Model" else "model"
+                _uri = f"runs:/{_rid}/{_art}"
+                _mv = mlflow.register_model(model_uri=_uri, name=_mname)
+                client.set_registered_model_alias(_mname, "Challenger", _mv.version)
+                print(f"Registered {_mname} v{_mv.version} with alias 'Challenger'")
+except Exception as _e:
+    print(f"Secondary model registration warning: {_e}")
