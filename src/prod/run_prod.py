@@ -28,6 +28,7 @@ for model_name, task_type, X_data, y_data in models_cfg:
             sk_model=prod_model,
             name="model",
             registered_model_name=model_name,
+            skops_trusted_types=["sklearn.tree._tree.Tree"],
         )
         prod_ver = model_info.registered_model_version
         client.set_registered_model_alias(model_name, "Champion", prod_ver)

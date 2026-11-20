@@ -32,6 +32,7 @@ for model_name, task_type, threshold in models_cfg:
             sk_model=loaded_model,
             name="model",
             registered_model_name=model_name,
+            skops_trusted_types=["sklearn.tree._tree.Tree"],
         )
         new_ver = model_info.registered_model_version
         client.set_registered_model_alias(model_name, "Challenger-pre-test", new_ver)
