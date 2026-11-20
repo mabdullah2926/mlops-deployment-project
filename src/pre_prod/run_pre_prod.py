@@ -1,3 +1,4 @@
+import os
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
@@ -5,7 +6,7 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db"))
 mlflow.set_experiment("MLOps_PreProd_Pipeline")
 client = MlflowClient()
 
